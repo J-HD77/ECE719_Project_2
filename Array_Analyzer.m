@@ -11,7 +11,7 @@ Array.Taper = ones(1,9).';
 
 % Create a cosine antenna element
 Elem = phased.CosineAntennaElement;
-Elem.CosinePower = [2 2];
+Elem.CosinePower = [1.5 1.5];
 Elem.FrequencyRange = [0 10000000000];
 Array.Element = Elem;
 % Assign Frequencies and Propagation Speed
@@ -20,43 +20,60 @@ PropagationSpeed = 300000000;
 
 %% Tuning
 % Parameters
-lambda = 3e8 / Frequency;
-d = Array.ElementSpacing;
+lambda      = 3e8 / Frequency;
+d           = Array.ElementSpacing;
 numElements = getNumElements(Array);
 element_idx = (0 : numElements - 1)';
 
 % Lorentzian
-fr_sweep = linspace(8e9,12e9, 10000);
-delta_f = 0.05 * fr_sweep;
-R = (2 + fr_sweep) ./ (fr_sweep.^2 - Frequency^2 + 1i * delta_f .* Frequency);
+fr_sweep    = linspace(8e9,12e9, 1000);
+delta_f     = 0.05 * fr_sweep;
+R           = (2 + fr_sweep) ./ (fr_sweep.^2 - Frequency^2 + 1i * delta_f .* Frequency);
 
 % Amplitude and phase responses
-amp_response = 1 - (abs(R) * 100e6);       
-phase_response = 2 * angle(R) + pi;           
+amp_response    = 1 - (abs(R) * 100e6);       
+phase_response  = 2 * angle(R) + pi; 
+
+figure;
+subplot(2,1,1);
+plot(fr_sweep/1e9, rad2deg(phase_response));
+xlabel('fr [GHz]'); ylabel('Phase [deg]');
+title('Achievable phase vs fr'); grid on;
+
+subplot(2,1,2);
+plot(fr_sweep/1e9, amp_response);
+xlabel('fr [GHz]'); ylabel('Amplitude');
+title('Achievable amplitude vs fr'); grid on;
+
+% Also plot amplitude vs phase directly
+figure;
+plot(rad2deg(phase_response), amp_response);
+xlabel('Phase [deg]'); ylabel('Amplitude');
+title('Amplitude vs Phase — Lorentzian coupling'); grid on;
 
 % Scan
-theta_steer = 0 : 10 : 60;   
-theta_scan = linspace(-90, 90, 3601);
-peak_gains = zeros(size(theta_steer));
-errors = zeros(size(theta_steer));
-actual_deg = zeros(size(theta_steer));
+theta_steer     = 0 : 15 : 60;   
+theta_scan      = linspace(-90, 90, 3601);
+peak_gains      = zeros(size(theta_steer));
+errors          = zeros(size(theta_steer));
+actual_deg      = zeros(size(theta_steer));
 
 % Pre-calculate Steering Vectors and Element Factor
-EF = step(Elem, Frequency, [theta_scan; zeros(size(theta_scan))]).'; 
-SV_matrix = exp(1i * 2*pi * (d/lambda) * element_idx * sin(deg2rad(theta_scan)));
+EF              = squeeze(step(Elem, Frequency, [theta_scan; zeros(size(theta_scan))])).';
+EF              = EF / max(EF); 
+SV_matrix       = exp(1i * 2*pi * (d/lambda) * element_idx * sin(deg2rad(theta_scan)));
 
 % Storage for polar plotting
 patterns_to_plot = zeros(length(theta_steer), length(theta_scan));
 
 for ti = 1 : length(theta_steer)
     theta_steer_rad = deg2rad(theta_steer(ti));
-    req_phase_vec = -2*pi * (d/lambda) * element_idx * sin(theta_steer_rad);
+    req_phase_vec = 2*pi * (d/lambda) * element_idx * sin(theta_steer_rad);
 
     w = zeros(numElements, 1);
     for el = 1 : numElements
-        % Find nearest phase in Lorentzian sweep using mod 2*pi
-        target = mod(req_phase_vec(el), 2*pi);
-        [~, idx] = min(abs(mod(phase_response, 2*pi) - target));
+        target = wrapToPi(req_phase_vec(el));
+        [~, idx] = min(abs(wrapToPi(phase_response) - target));
 
         % Complex weights in x + iy form
         A = amp_response(idx);
@@ -91,18 +108,18 @@ figure('Name', 'Polar Overlay', 'Color', 'w');
 pax = polaraxes;
 hold(pax, 'on');
 norm_ref = peak_gains(1); 
-colors = hsv(length(theta_steer) + 2); 
+colors = turbo(length(theta_steer));
 
 for ti = 1 : length(theta_steer)
     pattern_dB = 20*log10(patterns_to_plot(ti, :) / norm_ref);
-    polarplot(pax, deg2rad(theta_scan), pattern_dB, 'LineWidth', 1.5, 'Color', colors(ti,:));
+    polarplot(pax, deg2rad(-theta_scan), pattern_dB, 'LineWidth', 1.5, 'Color', colors(ti,:));
 end
 
 title('On Axis \phi = 0^\circ - Normalized Gain Overlay');
 
 % Set limits and ticks using the axes handle
-rlim(pax, [-20 5]); 
-rticks(pax, [-20 -15 -10 -5 0 5]);
+rlim(pax, [-20 0]);
+rticks(pax, [-20 -15 -10 -5 0]);
 thetalim(pax, [-90 90]); 
 thetaticks(pax, -90:30:90);
 
@@ -112,14 +129,17 @@ grid(pax, 'on');
 
 %% --- FIGURE 3: Gain [dBi] vs Theta with Curve Fit ---
 figure('Name', 'Scan Roll-off Fit', 'Color', 'w');
-offset = 22.7 - 20*log10(peak_gains(1)); 
-peak_dBi = 20*log10(peak_gains) + offset;
 
 norm_ratios = peak_gains / peak_gains(1);
-idx_fit = 2 : length(theta_steer); 
-log_cos = log(cos(deg2rad(theta_steer(idx_fit))));
-log_g   = log(norm_ratios(idx_fit));
-n_fit   = (log_cos * log_g') / (log_cos * log_cos'); 
+idx_fit     = 2 : length(theta_steer);
+log_cos     = log(cos(deg2rad(theta_steer(idx_fit))));
+log_g       = log(norm_ratios(idx_fit));
+n_fit       = (log_cos * log_g') / (log_cos * log_cos');
+
+D0_dBi = pattern(Array, Frequency, 0, 0, 'PropagationSpeed', PropagationSpeed, ...
+    'Type', 'Directivity', 'weights', w);
+offset = D0_dBi - 20*log10(peak_gains(1)); 
+peak_dBi = 20*log10(peak_gains) + offset;
 
 theta_fine = linspace(0, 60, 500);
 fit_curve_dBi = peak_dBi(1) + 20*log10(cos(deg2rad(theta_fine)).^n_fit);
