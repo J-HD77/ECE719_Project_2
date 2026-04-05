@@ -9,7 +9,7 @@ Array.Taper = ones(1,9).';
 
 % Create a cosine antenna element
 Elem = phased.CosineAntennaElement;
-Elem.CosinePower = [2.5 2.5];
+Elem.CosinePower = [2 2];
 Elem.FrequencyRange = [0 10000000000];
 Array.Element = Elem;
 
@@ -31,10 +31,6 @@ bits_to_test = [2, 3, 4]; % Parts c, d, e
 
 % Symbolic setup for solver
 syms fr positive
-R_8 = (2+8e9) / (8e9^2 - f^2 + 1i*0.05*8e9*f);
-R_12 = (2+12e9) / (12e9^2 - f^2 + 1i*0.05*12e9*f);
-phi_8 = rad2deg(2*angle(R_8) + pi);
-phi_12 = rad2deg(2*angle(R_12) + pi);
 
 %% Loop through Quantization Levels
 for b = 1:length(bits_to_test)
@@ -55,8 +51,8 @@ for b = 1:length(bits_to_test)
         for el = 1:numElements
             % 1. Quantize the required phase
             phi_cont_deg = rad2deg(wrapToPi(req_phase_vec(el)));
-            step = 360 / num_states;
-            phi_req_deg = round(phi_cont_deg / step) * step;
+            step_size = 360 / num_states;
+            phi_req_deg = round((phi_cont_deg - step_size/2) / step_size) * step_size + step_size/2;
             
             % Solve for fr that achieves phi_req at 10 GHz within [8, 12] GHz
             eqn    = ((2*angle((2 + fr)./(fr^2 - f^2 + 1i*0.05*fr*f)) + pi)*180/pi) ...
@@ -66,7 +62,7 @@ for b = 1:length(bits_to_test)
     
             % If not achievable — clamp to nearest boundary (phase quantization limit)
             if isempty(fr_sol)
-                if abs(phi_8 - phi_req_deg) < abs(phi_12 - phi_req_deg)
+                if phi_req_deg < 0
                     fr_sol = 8e9;
                 else
                     fr_sol = 12e9;
@@ -91,11 +87,21 @@ for b = 1:length(bits_to_test)
         end
         
         % Calculate peak and actual pointing angle
-        [gains, angs] = pattern(Array, f, theta_scan, 0, 'weights', w, 'Type', 'directivity');
-        [peak_val, idx] = max(gains);
-        peak_gains(ti) = peak_val;
-        errors(ti) = abs(theta_steer(ti) - angs(idx));
-        patterns_to_plot(ti, :) = gains; 
+        % Peak directivity at intended steering angle — absolute dBi
+        peak_gains(ti) = pattern(Array, Frequency, theta_steer(ti), 0, ...
+                             'PropagationSpeed', PropagationSpeed, ...
+                             'Type', 'directivity', ...
+                             'weights', w);
+    
+        % Full pattern in powerdb for polar plot
+        AF_total               = pattern(Array, Frequency, theta_scan, 0, ...
+                                     'PropagationSpeed', PropagationSpeed, ...
+                                     'Type', 'powerdb', ...
+                                     'weights', w).';
+        [~, peak_idx]          = max(AF_total);
+        actual_deg(ti)         = theta_scan(peak_idx);
+        errors(ti)             = abs(theta_steer(ti) - actual_deg(ti));
+        patterns_to_plot(ti,:) = AF_total;
     end
     
     % --- Plotting Results for this Bit-level ---

@@ -9,7 +9,7 @@ Array.Taper = ones(1,9).';
 
 % Create a cosine antenna element
 Elem = phased.CosineAntennaElement;
-Elem.CosinePower = [2.5 2.5];
+Elem.CosinePower = [2 2];
 Elem.FrequencyRange = [0 10000000000];
 Array.Element = Elem;
 
@@ -35,11 +35,6 @@ errors           = zeros(size(theta_steer));
 actual_deg       = zeros(size(theta_steer));
 patterns_to_plot = zeros(length(theta_steer), length(theta_scan));
 
-R_8    = (2+8e9)  / (8e9^2  - f^2 + 1i*0.05*8e9*f);
-R_12   = (2+12e9) / (12e9^2 - f^2 + 1i*0.05*12e9*f);
-phi_8  = rad2deg(2*angle(R_8)  + pi);
-phi_12 = rad2deg(2*angle(R_12) + pi);
-
 %% Main loop — continuous tuning 8 to 12 GHz
 for ti = 1 : length(theta_steer)
     theta_rad     = deg2rad(theta_steer(ti));
@@ -57,8 +52,8 @@ for ti = 1 : length(theta_steer)
         fr_sol = (vpasolve(eqn,fr));
 
         % Clamp to nearest boundary (phase quantization limit)
-        if isempty(fr_sol)
-            if abs(phi_8 - phi_req_deg) < abs(phi_12 - phi_req_deg)
+         if isempty(fr_sol)
+            if phi_req_deg < 0
                 fr_sol = 8e9;
             else
                 fr_sol = 12e9;
@@ -75,7 +70,7 @@ for ti = 1 : length(theta_steer)
         R_el    = (2 + fr_sol) / (fr_sol^2 - f^2 + 1i*0.05*fr_sol*f);
         Amp     = 1 - (abs(R_el) * 100e6);
         Phas    = 2*angle(R_el) + pi;
-        
+
         real_part = Amp * cos(Phas);
         imag_part = Amp * sin(Phas);
         w(el)     = real_part + 1i * imag_part;
@@ -137,7 +132,7 @@ log_g   = log(norm_lin(idx_fit));
 n_fit   = (log_cos * log_g') / (log_cos * log_cos');
 
 theta_fine    = linspace(0, 60, 500);
-fit_curve_dBi = peak_gains(1) + 10*log10(cosd(theta_fine).^n_fit);
+fit_curve_dBi = peak_gains(1) + 20*log10(cosd(theta_fine).^n_fit);
 
 figure('Name', 'Scan Roll-off Fit', 'Color', 'w');
 plot(theta_fine, fit_curve_dBi, 'b-', 'LineWidth', 2); hold on;
