@@ -9,7 +9,7 @@ Array.Taper = ones(1,9).';
 
 % Create a cosine antenna element
 Elem = phased.CosineAntennaElement;
-Elem.CosinePower = [1.5 1.5];
+Elem.CosinePower = [2.5 2.5];
 Elem.FrequencyRange = [0 10000000000];
 Array.Element = Elem;
 
@@ -17,205 +17,138 @@ Array.Element = Elem;
 Frequency = 10000000000;
 PropagationSpeed = 300000000;
 
-%% Setup
-lambda      = 3e8 / Frequency;
-d           = Array.ElementSpacing;
+% Parameters
+f = Frequency;
+lambda = PropagationSpeed / f;
+d = Array.ElementSpacing;
 numElements = getNumElements(Array);
 element_idx = (0 : numElements-1)';
-f           = Frequency;
-
-% Continuous Lorentzian LUT
-fr_sweep       = linspace(8e9, 12e9, 10000);
-delta_f        = 0.05 * fr_sweep;
-R              = (2 + fr_sweep) ./ (fr_sweep.^2 - f^2 + 1i * delta_f .* f);
-amp_response   = 1 - abs(R) * 100e6;
-phase_response = 2 * angle(R) + pi;
-
-% Quantization cases: 0 = continuous (problem 1), 2, 3, 4 bits
-bit_cases   = [0, 2, 3, 4];
-bit_labels  = {'Continuous', '2-bit (4 states)', '3-bit (8 states)', '4-bit (16 states)'};
 
 % Scan setup
-theta_steer      = 0 : 15 : 60;
-theta_scan       = linspace(-90, 90, 3601);
+theta_steer = 0 : 15 : 60;
+theta_scan = -90 : 0.1 : 90;
+bits_to_test = [2, 3, 4]; % Parts c, d, e
 
-% Pre-calculate Element Factor and Steering Vector
-EF        = squeeze(step(Elem, Frequency, [theta_scan; zeros(size(theta_scan))])).';
-EF        = EF / max(EF);
-SV_matrix = exp(1i * 2*pi * (d/lambda) * element_idx * sin(deg2rad(theta_scan)));
+% Symbolic setup for solver
+syms fr positive
+R_8 = (2+8e9) / (8e9^2 - f^2 + 1i*0.05*8e9*f);
+R_12 = (2+12e9) / (12e9^2 - f^2 + 1i*0.05*12e9*f);
+phi_8 = rad2deg(2*angle(R_8) + pi);
+phi_12 = rad2deg(2*angle(R_12) + pi);
 
-% Storage across all quantization cases
-all_peak_gains       = zeros(length(bit_cases), length(theta_steer));
-all_errors           = zeros(length(bit_cases), length(theta_steer));
-all_actual_deg       = zeros(length(bit_cases), length(theta_steer));
-all_patterns         = zeros(length(bit_cases), length(theta_steer), length(theta_scan));
-all_n_fit            = zeros(length(bit_cases), 1);
-all_peak_dBi         = zeros(length(bit_cases), length(theta_steer));
+%% Loop through Quantization Levels
+for b = 1:length(bits_to_test)
+    num_bits = bits_to_test(b);
+    num_states = 2^num_bits;
+    fprintf('Simulating %d-bit quantization...\n', num_bits);
+    
+    peak_gains = zeros(size(theta_steer));
+    errors = zeros(size(theta_steer));
+    patterns_to_plot = zeros(length(theta_steer), length(theta_scan)); 
+    all_A = []; all_P = []; 
 
-% SLL storage [num_cases x num_steer]
-all_SLL = zeros(length(bit_cases), length(theta_steer));
-
-%% Loop over quantization cases
-for qi = 1 : length(bit_cases)
-    bits = bit_cases(qi);
-
-    % Build quantized phase and amplitude LUTs
-    if bits == 0
-        % Continuous — use full LUT
-        phase_lut = phase_response;
-        amp_lut   = amp_response;
-        fr_lut    = fr_sweep;
-    else
-        % Quantized — pick N evenly spaced phases from the achievable range
-        N_states  = 2^bits;
-        % Evenly spaced phases across the achievable range
-        phase_states = linspace(min(phase_response), max(phase_response), N_states);
-
-        % For each quantized phase state find the fr and amplitude
-        fr_lut    = zeros(1, N_states);
-        amp_lut   = zeros(1, N_states);
-        phase_lut = zeros(1, N_states);
-        for si = 1 : N_states
-            [~, idx]     = min(abs(wrapToPi(phase_response) - wrapToPi(phase_states(si))));
-            fr_lut(si)   = fr_sweep(idx);
-            amp_lut(si)  = amp_response(idx);
-            phase_lut(si)= phase_response(idx);
-        end
-    end
-
-    %% Amplitude vs Phase
-    figure('Name', sprintf('%s - Amplitude vs Phase', bit_labels{qi}), 'Color', 'w');
-    plot(rad2deg(phase_response), amp_response, 'b-', 'LineWidth', 1.5);
-    hold on;
-    if bits > 0
-        scatter(rad2deg(phase_lut), amp_lut, 80, 'ro', 'filled');
-        legend('Continuous', sprintf('%d quantized states', 2^bits), 'Location', 'north');
-    end
-    xlabel('Phase [deg]');
-    ylabel('Amplitude [A.U]');
-    title(sprintf('Amplitude versus Phase @ 10 GHz - %s', bit_labels{qi}));
-    xticks([-135 -90 -45 0 45 90 135]);
-    xlim([-180 180]);
-    grid on;
-
-    %% Compute weights and patterns
-    peak_gains       = zeros(size(theta_steer));
-    errors           = zeros(size(theta_steer));
-    actual_deg       = zeros(size(theta_steer));
-    patterns_to_plot = zeros(length(theta_steer), length(theta_scan));
-
-    for ti = 1 : length(theta_steer)
-        theta_rad     = deg2rad(theta_steer(ti));
+    for ti = 1:length(theta_steer)
+        theta_rad = deg2rad(theta_steer(ti));
         req_phase_vec = 2*pi * (d/lambda) * element_idx * sin(theta_rad);
-
+        
         w = zeros(numElements, 1);
-        for el = 1 : numElements
-            target   = wrapToPi(req_phase_vec(el));
-            [~, idx] = min(abs(wrapToPi(phase_lut) - target));
-            w(el)    = amp_lut(idx) * exp(1i * phase_lut(idx));
+        for el = 1:numElements
+            % 1. Quantize the required phase
+            phi_cont_deg = rad2deg(wrapToPi(req_phase_vec(el)));
+            step = 360 / num_states;
+            phi_req_deg = round(phi_cont_deg / step) * step;
+            
+            % Solve for fr that achieves phi_req at 10 GHz within [8, 12] GHz
+            eqn    = ((2*angle((2 + fr)./(fr^2 - f^2 + 1i*0.05*fr*f)) + pi)*180/pi) ...
+                     == phi_req_deg;
+            assume(fr,'positive');
+            fr_sol = (vpasolve(eqn,fr));
+    
+            % If not achievable — clamp to nearest boundary (phase quantization limit)
+            if isempty(fr_sol)
+                if abs(phi_8 - phi_req_deg) < abs(phi_12 - phi_req_deg)
+                    fr_sol = 8e9;
+                else
+                    fr_sol = 12e9;
+                end
+            end
+    
+            if fr_sol < 8e9
+                fr_sol = 8e9;
+            elseif fr_sol > 12e9
+                fr_sol = 12e9;
+            end
+            
+            % 4. Compute coupled weight
+            R_el = (2 + fr_sol) / (fr_sol^2 - f^2 + 1i*0.05*fr_sol*f);
+            A = 1 - abs(R_el) * 100e6;
+            P = 2*angle(R_el) + pi;
+            w(el) = A * exp(1i * P);
+            
+            % Save for Lorentzian plot
+            all_A(end+1) = A; 
+            all_P(end+1) = rad2deg(P);
         end
-
-        AF_total               = abs(w.' * SV_matrix) .* EF;
-        [max_val, peak_idx]    = max(AF_total);
-        peak_gains(ti)         = max_val;
-        actual_deg(ti)         = theta_scan(peak_idx);
-        errors(ti)             = abs(theta_steer(ti) - actual_deg(ti));
-        patterns_to_plot(ti,:) = AF_total;
-
-        % SLL calculation — find highest sidelobe outside 10 deg of main beam
-        BW_factor = 1 / cos(deg2rad(actual_deg(ti)));   % beam broadens with scan
-        main_beam_mask = abs(theta_scan - actual_deg(ti)) < (10 * BW_factor);
-        AF_sidelobe              = AF_total;
-        AF_sidelobe(main_beam_mask) = 0;
-        SLL_linear               = max(AF_sidelobe) / max_val;
-        all_SLL(qi, ti)          = 20*log10(SLL_linear);
+        
+        % Calculate peak and actual pointing angle
+        [gains, angs] = pattern(Array, f, theta_scan, 0, 'weights', w, 'Type', 'directivity');
+        [peak_val, idx] = max(gains);
+        peak_gains(ti) = peak_val;
+        errors(ti) = abs(theta_steer(ti) - angs(idx));
+        patterns_to_plot(ti, :) = gains; 
     end
+    
+    % --- Plotting Results for this Bit-level ---
+    figure('Name', sprintf('%d-Bit Summary', num_bits), 'Color', 'w', 'Position', [100 100 1200 400]);
+    
+    %% 1. Pointing Error
+    subplot(1,4,1);
+    scatter(theta_steer, errors, 80, 'filled', 'MarkerFaceColor', [0.15 0.30 0.45]); grid on;
+    title('Pointing Error'); xlabel('\theta_{intended} [deg]'); ylabel('Error [deg]');
 
-    all_peak_gains(qi,:)   = peak_gains;
-    all_errors(qi,:)       = errors;
-    all_actual_deg(qi,:)   = actual_deg;
-    all_patterns(qi,:,:)   = patterns_to_plot;
-
-    % n_fit
-    norm_ratios = peak_gains / peak_gains(1);
-    idx_fit     = 2 : length(theta_steer);
-    log_cos     = log(cos(deg2rad(theta_steer(idx_fit))));
-    log_g       = log(norm_ratios(idx_fit));
-    n_fit       = (log_cos * log_g') / (log_cos * log_cos');
-    all_n_fit(qi) = n_fit;
-
-    % dBi offset
-    D0_dBi   = pattern(Array, Frequency, 0, 0, 'PropagationSpeed', PropagationSpeed, ...
-                   'Type', 'Directivity', 'weights', w);
-    offset   = D0_dBi - 20*log10(peak_gains(1));
-    peak_dBi = 20*log10(peak_gains) + offset;
-    all_peak_dBi(qi,:) = peak_dBi;
-end
-
-%% --- FIGURE a): Pointing Angle Error — all cases overlaid ---
-figure('Name', 'Pointing Angle Error Comparison', 'Color', 'w');
-markers = {'o','s','d','^'};
-colors  = lines(length(bit_cases));
-hold on;
-for qi = 1 : length(bit_cases)
-    plot(theta_steer, all_errors(qi,:), '-', 'Marker', markers{qi}, ...
-        'Color', colors(qi,:), 'LineWidth', 1.5, 'MarkerSize', 8, ...
-        'DisplayName', bit_labels{qi});
-end
-grid on; grid minor;
-xlabel('Intended pointing angle [deg]');
-ylabel('|Intended - Actual| [deg]');
-title('Pointing Angle Error Comparison');
-legend('Location','northwest');
-xticks(theta_steer);
-
-%% --- FIGURE b): Polar Overlay — one figure per quantization ---
-for qi = 1 : length(bit_cases)
-    figure('Name', sprintf('Polar Overlay - %s', bit_labels{qi}), 'Color', 'w');
-    pax    = polaraxes;
+    %% 2. Polar Pattern
+    ax_pol = subplot(1,4,2); 
+    pos = get(ax_pol, 'Position'); % Get subplot position
+    delete(ax_pol); % Remove standard axes
+    pax = polaraxes('Position', pos); % Create proper polar axes
     hold(pax, 'on');
-    clrs   = turbo(length(theta_steer));
+    colors = turbo(length(theta_steer));
+    
+    % Reference max for normalization (0-degree beam peak)
+    ref_max = max(patterns_to_plot(1,:));
+    
     for ti = 1 : length(theta_steer)
-        pattern_dB = 20*log10(squeeze(all_patterns(qi,ti,:)).' / all_peak_gains(qi,1));
-        polarplot(pax, deg2rad(-theta_scan), pattern_dB, ...
-            'LineWidth', 1.5, 'Color', clrs(ti,:));
+        pattern_norm = patterns_to_plot(ti,:) - ref_max;
+        polarplot(pax, deg2rad(theta_scan), pattern_norm, ...
+            'LineWidth', 1.5, 'Color', colors(ti,:));
     end
-    title(pax, sprintf('On Axis \\phi = 0^\\circ - %s', bit_labels{qi}));
-    rlim(pax,[-20 0]); rticks(pax,[-20 -15 -10 -5 0]);
-    thetalim(pax,[-90 90]); thetaticks(pax,-90:30:90);
-    pax.ThetaZeroLocation = 'top';
-    pax.ThetaDir          = 'clockwise';
-    grid(pax,'on');
-end
+    title(pax, 'Normalized Gain Overlay');
+    rlim(pax,[-20 0]); thetalim(pax,[-90 90]);
+    pax.ThetaZeroLocation = 'top'; pax.ThetaDir = 'clockwise';
+    grid(pax,'on');    
+    
+    %% 3. Scan Roll-off Fit
+    subplot(1,4,3);
+    norm_dB  = peak_gains - peak_gains(1);
+    norm_lin = 10.^(norm_dB/10);
+    
+    idx_fit = 2 : length(theta_steer);
+    log_cos = log(cos(deg2rad(theta_steer(idx_fit))));
+    log_g   = log(norm_lin(idx_fit));
+    n_fit   = (log_cos * log_g') / (log_cos * log_cos');
+    
+    theta_fine    = linspace(0, 60, 500);
+    fit_curve = peak_gains(1) + 10*log10(cos(deg2rad(theta_fine)).^n_fit);
 
-%% --- FIGURE b): Scan Roll-off — all cases overlaid ---
-figure('Name', 'Scan Roll-off Comparison', 'Color', 'w');
-hold on;
-theta_fine = linspace(0, 60, 500);
-for qi = 1 : length(bit_cases)
-    fit_curve = all_peak_dBi(qi,1) + ...
-        20*log10(cos(deg2rad(theta_fine)).^all_n_fit(qi));
-    plot(theta_fine, fit_curve, '-', 'Color', colors(qi,:), 'LineWidth', 2, ...
-        'DisplayName', sprintf('%s  n=%.2f', bit_labels{qi}, all_n_fit(qi)));
-    scatter(theta_steer, all_peak_dBi(qi,:), 60, colors(qi,:), ...
-        markers{qi}, 'LineWidth', 1.5, 'HandleVisibility', 'off');
-end
-grid on;
-xlabel('\theta [deg]'); ylabel('Gain [dBi]');
-title('Scan Roll-off — cos(\theta)^n fit comparison');
-legend('Location','southwest');
+    plot(theta_fine, fit_curve, 'b-', 'LineWidth', 2); hold on;
+    scatter(theta_steer, peak_gains, 60, 'ko', 'LineWidth', 1.5);
+    grid on; title(['Roll-off: cos(\theta)^{', num2str(n_fit, '%.2f'), '}']);
+    xlabel('\theta [deg]'); ylabel('Gain [dBi]');
+    legend('Fit', 'Simulated', 'Location', 'southwest');
 
-%% --- FIGURE g): SLL vs pointing angle for all quantization cases ---
-figure('Name', 'SLL vs Pointing Angle', 'Color', 'w');
-hold on;
-for qi = 1 : length(bit_cases)
-    plot(theta_steer, all_SLL(qi,:), '-', 'Marker', markers{qi}, ...
-        'Color', colors(qi,:), 'LineWidth', 1.5, 'MarkerSize', 8, ...
-        'DisplayName', bit_labels{qi});
+    %% 4. Lorentzian: Amplitude vs Phase
+    subplot(1,4,4);
+    [sorted_P, idx_s] = sort(all_P);
+    plot(sorted_P, all_A(idx_s), 'r.-', 'LineWidth', 1.5); grid on;
+    title('Lorentzian: A vs \phi'); xlabel('Phase [deg]'); ylabel('Amplitude');
 end
-grid on; grid minor;
-xlabel('Intended pointing angle [deg]');
-ylabel('SLL [dB]');
-title('Sidelobe Level vs Pointing Angle');
-legend('Location','best');
-xticks(theta_steer);

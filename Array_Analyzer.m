@@ -9,7 +9,7 @@ Array.Taper = ones(1,9).';
 
 % Create a cosine antenna element
 Elem = phased.CosineAntennaElement;
-Elem.CosinePower = [2 2];
+Elem.CosinePower = [2.5 2.5];
 Elem.FrequencyRange = [0 10000000000];
 Array.Element = Elem;
 
@@ -44,11 +44,9 @@ phi_12 = rad2deg(2*angle(R_12) + pi);
 for ti = 1 : length(theta_steer)
     theta_rad     = deg2rad(theta_steer(ti));
     req_phase_vec = 2*pi * (d/lambda) * element_idx * sin(theta_rad);
-    phi_req_deg = rad2deg(wrapToPi(req_phase_vec));
 
     w = zeros(numElements, 1);
     for el = 1 : numElements
-
         % Required phase in degrees
         phi_req_deg = rad2deg(wrapToPi(req_phase_vec(el)));
 
@@ -58,7 +56,7 @@ for ti = 1 : length(theta_steer)
         assume(fr,'positive');
         fr_sol = (vpasolve(eqn,fr));
 
-        % If not achievable — clamp to nearest boundary (phase quantization limit)
+        % Clamp to nearest boundary (phase quantization limit)
         if isempty(fr_sol)
             if abs(phi_8 - phi_req_deg) < abs(phi_12 - phi_req_deg)
                 fr_sol = 8e9;
@@ -73,11 +71,14 @@ for ti = 1 : length(theta_steer)
             fr_sol = 12e9;
         end
 
-        % Compute R at solved fr — amplitude and phase are coupled
-        R_el  = (2 + fr_sol) / (fr_sol^2 - f^2 + 1i*0.05*fr_sol*f);
-        A     = 1 - abs(R_el) * 100e6;
-        P     = 2*angle(R_el) + pi;
-        w(el) = A * exp(1i * P);
+        % Compute R at solved
+        R_el    = (2 + fr_sol) / (fr_sol^2 - f^2 + 1i*0.05*fr_sol*f);
+        Amp     = 1 - (abs(R_el) * 100e6);
+        Phas    = 2*angle(R_el) + pi;
+        
+        real_part = Amp * cos(Phas);
+        imag_part = Amp * sin(Phas);
+        w(el)     = real_part + 1i * imag_part;
     end
 
     % Peak directivity at intended steering angle — absolute dBi
@@ -97,7 +98,7 @@ for ti = 1 : length(theta_steer)
     patterns_to_plot(ti,:) = AF_total;
 end
 
-%% --- FIGURE 1: Pointing Angle Error (part a) ---
+%% FIGURE 1: Pointing Angle Error (part a)
 figure('Name', 'Pointing Angle Error', 'Color', 'w');
 scatter(theta_steer, errors, 120, 'filled', ...
     'MarkerFaceColor', [0.216 0.541 0.867], 'MarkerEdgeColor', 'k');
@@ -107,7 +108,7 @@ ylabel('|Intended - Actual| [deg]');
 title('Pointing Angle Error at 10 GHz (f_r tunable 8–12 GHz)');
 xticks(theta_steer);
 
-%% --- FIGURE 2: Polar Normalized Gain Overlay (part b) ---
+%% FIGURE 2: Polar Normalized Gain Overlay (part b)
 figure('Name', 'Polar Overlay', 'Color', 'w');
 pax    = polaraxes;
 hold(pax, 'on');
@@ -125,7 +126,7 @@ pax.ThetaZeroLocation = 'top';
 pax.ThetaDir          = 'clockwise';
 grid(pax,'on');
 
-%% --- FIGURE 3: Scan Roll-off with cos(theta)^n fit (part b) ---
+%% FIGURE 3: Scan Roll-off with cos(theta)^n fit (part b)
 % Normalise to 0 deg — peak_gains in absolute dBi
 norm_dB  = peak_gains - peak_gains(1);
 norm_lin = 10.^(norm_dB/10);
@@ -136,7 +137,7 @@ log_g   = log(norm_lin(idx_fit));
 n_fit   = (log_cos * log_g') / (log_cos * log_cos');
 
 theta_fine    = linspace(0, 60, 500);
-fit_curve_dBi = peak_gains(1) + 10*log10(cos(deg2rad(theta_fine)).^n_fit);
+fit_curve_dBi = peak_gains(1) + 10*log10(cosd(theta_fine).^n_fit);
 
 figure('Name', 'Scan Roll-off Fit', 'Color', 'w');
 plot(theta_fine, fit_curve_dBi, 'b-', 'LineWidth', 2); hold on;
