@@ -9,7 +9,7 @@ Array.Taper = ones(1,9).';
 
 % Create a cosine antenna element
 Elem = phased.CosineAntennaElement;
-Elem.CosinePower = [2 2];
+Elem.CosinePower = [2.25 2.25];
 Elem.FrequencyRange = [0 10000000000];
 Array.Element = Elem;
 
@@ -46,39 +46,34 @@ for b = 1:length(bits_to_test)
     for ti = 1:length(theta_steer)
         theta_rad = deg2rad(theta_steer(ti));
         req_phase_vec = 2*pi * (d/lambda) * element_idx * sin(theta_rad);
-        
+        phase_check = rad2deg(wrapToPi(req_phase_vec));
+
         w = zeros(numElements, 1);
         for el = 1:numElements
-            % 1. Quantize the required phase
+            % Quantize the required phase
             phi_cont_deg = rad2deg(wrapToPi(req_phase_vec(el)));
             step_size = 360 / num_states;
-            phi_req_deg = round((phi_cont_deg - step_size/2) / step_size) * step_size + step_size/2;
-            
+            phi_req_deg = floor((phi_cont_deg - step_size/2) / step_size + 0.5) * step_size + step_size/2;
+            phi_req_deg = rad2deg(angle(exp(1i*deg2rad(phi_req_deg)))); 
+
             % Solve for fr that achieves phi_req at 10 GHz within [8, 12] GHz
             eqn    = ((2*angle((2 + fr)./(fr^2 - f^2 + 1i*0.05*fr*f)) + pi)*180/pi) ...
                      == phi_req_deg;
             assume(fr,'positive');
             fr_sol = (vpasolve(eqn,fr));
-    
-            % If not achievable — clamp to nearest boundary (phase quantization limit)
-            if isempty(fr_sol)
-                if phi_req_deg < 0
-                    fr_sol = 8e9;
-                else
-                    fr_sol = 12e9;
-                end
-            end
-    
+
             if fr_sol < 8e9
                 fr_sol = 8e9;
             elseif fr_sol > 12e9
                 fr_sol = 12e9;
             end
-            
-            % 4. Compute coupled weight
+
+                    fprintf('    El %d:, prequant=%.2f, quant=%.2f, fr=%.2f\n', el, phase_check(el), phi_req_deg, fr_sol);
+
+            % Compute coupled weight
             R_el = (2 + fr_sol) / (fr_sol^2 - f^2 + 1i*0.05*fr_sol*f);
             A = 1 - abs(R_el) * 100e6;
-            P = 2*angle(R_el) + pi;
+            P = 2 * angle(R_el) + pi;
             w(el) = A * exp(1i * P);
             
             % Save for Lorentzian plot
@@ -98,13 +93,19 @@ for b = 1:length(bits_to_test)
                                      'PropagationSpeed', PropagationSpeed, ...
                                      'Type', 'powerdb', ...
                                      'weights', w).';
-        [~, peak_idx]          = max(AF_total);
+        [main_peak, peak_idx]  = max(AF_total);
         actual_deg(ti)         = theta_scan(peak_idx);
         errors(ti)             = abs(theta_steer(ti) - actual_deg(ti));
         patterns_to_plot(ti,:) = AF_total;
+
+        [pk_vals, ~] = findpeaks(AF_total);
+        sidelobes = pk_vals(pk_vals < (main_peak - 0.1));
+        sll_vals(ti) = max(sidelobes) - main_peak;
     end
     
-    % --- Plotting Results for this Bit-level ---
+    sll_all_bits(b, :) = sll_vals;
+
+    %% Plotting Results for this Bit-level
     figure('Name', sprintf('%d-Bit Summary', num_bits), 'Color', 'w', 'Position', [100 100 1200 400]);
     
     %% 1. Pointing Error
@@ -143,8 +144,8 @@ for b = 1:length(bits_to_test)
     log_g   = log(norm_lin(idx_fit));
     n_fit   = (log_cos * log_g') / (log_cos * log_cos');
     
-    theta_fine    = linspace(0, 60, 500);
-    fit_curve = peak_gains(1) + 10*log10(cos(deg2rad(theta_fine)).^n_fit);
+    theta_fine  = linspace(0, 60, 500);
+    fit_curve   = peak_gains(1) + 10*log10(cos(deg2rad(theta_fine)).^n_fit);
 
     plot(theta_fine, fit_curve, 'b-', 'LineWidth', 2); hold on;
     scatter(theta_steer, peak_gains, 60, 'ko', 'LineWidth', 1.5);
@@ -158,3 +159,17 @@ for b = 1:length(bits_to_test)
     plot(sorted_P, all_A(idx_s), 'r.-', 'LineWidth', 1.5); grid on;
     title('Lorentzian: A vs \phi'); xlabel('Phase [deg]'); ylabel('Amplitude');
 end
+
+%% FINAL COMPARISON: Sidelobe Level vs. Angle
+figure('Name', 'SLL Comparison', 'Color', 'w', 'Position', [200 200 600 400]);
+markers = {'-o', '-s', '-^'};
+hold on;
+for b = 1:length(bits_to_test)
+    plot(theta_steer, sll_all_bits(b,:), markers{b}, 'LineWidth', 2, ...
+        'DisplayName', sprintf('%d-Bit Quantization', bits_to_test(b)));
+end
+grid on; grid minor;
+xlabel('Steering Angle [deg]'); ylabel('Peak Sidelobe Level [dBc]');
+title('Sidelobe Level (SLL) Performance');
+legend('Location', 'northeast');
+ylim([-20 0]);

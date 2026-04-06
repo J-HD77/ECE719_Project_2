@@ -9,7 +9,7 @@ Array.Taper = ones(1,9).';
 
 % Create a cosine antenna element
 Elem = phased.CosineAntennaElement;
-Elem.CosinePower = [2 2];
+Elem.CosinePower = [2.25 2.25];
 Elem.FrequencyRange = [0 10000000000];
 Array.Element = Elem;
 
@@ -66,10 +66,12 @@ for ti = 1 : length(theta_steer)
             fr_sol = 12e9;
         end
 
+        %fprintf('    El %d:, quant=%.2f, fr=%.2f\n', el, phi_req_deg, fr_sol);
+
         % Compute R at solved
         R_el    = (2 + fr_sol) / (fr_sol^2 - f^2 + 1i*0.05*fr_sol*f);
         Amp     = 1 - (abs(R_el) * 100e6);
-        Phas    = 2*angle(R_el) + pi;
+        Phas    = 2 * angle(R_el) + pi;
 
         real_part = Amp * cos(Phas);
         imag_part = Amp * sin(Phas);
@@ -132,7 +134,7 @@ log_g   = log(norm_lin(idx_fit));
 n_fit   = (log_cos * log_g') / (log_cos * log_cos');
 
 theta_fine    = linspace(0, 60, 500);
-fit_curve_dBi = peak_gains(1) + 20*log10(cosd(theta_fine).^n_fit);
+fit_curve_dBi = peak_gains(1) + 10*log10(cosd(theta_fine).^n_fit);
 
 figure('Name', 'Scan Roll-off Fit', 'Color', 'w');
 plot(theta_fine, fit_curve_dBi, 'b-', 'LineWidth', 2); hold on;
