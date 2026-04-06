@@ -36,25 +36,30 @@ syms fr positive
 for b = 1:length(bits_to_test)
     num_bits = bits_to_test(b);
     num_states = 2^num_bits;
+
+    step_size = 360 / num_states;
+    half_step_rad = deg2rad(step_size / 2);
+
     fprintf('Simulating %d-bit quantization...\n', num_bits);
     
+    sv = phased.SteeringVector('SensorArray', Array,...
+        'PropagationSpeed', PropagationSpeed, ...
+        'NumPhaseShifterBits', num_bits);
+
     peak_gains = zeros(size(theta_steer));
     errors = zeros(size(theta_steer));
     patterns_to_plot = zeros(length(theta_steer), length(theta_scan)); 
-    all_A = []; all_P = []; 
+    all_A = []; 
+    all_P = []; 
 
     for ti = 1:length(theta_steer)
-        theta_rad = deg2rad(theta_steer(ti));
-        req_phase_vec = 2*pi * (d/lambda) * element_idx * sin(theta_rad);
-        phase_check = rad2deg(wrapToPi(req_phase_vec));
-
+        w_quantized = sv(Frequency, [theta_steer(ti); 0]);
+        w_shifted = w_quantized .* exp(1i * half_step_rad);
         w = zeros(numElements, 1);
+
         for el = 1:numElements
             % Quantize the required phase
-            phi_cont_deg = rad2deg(wrapToPi(req_phase_vec(el)));
-            step_size = 360 / num_states;
-            phi_req_deg = floor((phi_cont_deg - step_size/2) / step_size + 0.5) * step_size + step_size/2;
-            phi_req_deg = rad2deg(angle(exp(1i*deg2rad(phi_req_deg)))); 
+            phi_req_deg = rad2deg(angle(w_shifted(el)));
 
             % Solve for fr that achieves phi_req at 10 GHz within [8, 12] GHz
             eqn    = ((2*angle((2 + fr)./(fr^2 - f^2 + 1i*0.05*fr*f)) + pi)*180/pi) ...
@@ -68,7 +73,7 @@ for b = 1:length(bits_to_test)
                 fr_sol = 12e9;
             end
 
-                    fprintf('    El %d:, prequant=%.2f, quant=%.2f, fr=%.2f\n', el, phase_check(el), phi_req_deg, fr_sol);
+            fprintf('    El %d:, phase=%.2f, fr=%.2f\n', el, phi_req_deg, fr_sol);
 
             % Compute coupled weight
             R_el = (2 + fr_sol) / (fr_sol^2 - f^2 + 1i*0.05*fr_sol*f);
@@ -98,9 +103,8 @@ for b = 1:length(bits_to_test)
         errors(ti)             = abs(theta_steer(ti) - actual_deg(ti));
         patterns_to_plot(ti,:) = AF_total;
 
-        [pk_vals, ~] = findpeaks(AF_total);
-        sidelobes = pk_vals(pk_vals < (main_peak - 0.1));
-        sll_vals(ti) = max(sidelobes) - main_peak;
+        [psl, ~] = sidelobelevel(AF_total);
+        sll_vals(ti) = psl; 
     end
     
     sll_all_bits(b, :) = sll_vals;

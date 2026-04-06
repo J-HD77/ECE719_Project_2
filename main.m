@@ -1,7 +1,0 @@
-run('array_analyzer.m');
-
-%[appendix]{"version":"1.0"}
-%---
-%[metadata:view]
-%   data: {"layout":"onright","rightPanelPercent":15}
-%---

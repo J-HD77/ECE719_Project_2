@@ -35,15 +35,18 @@ errors           = zeros(size(theta_steer));
 actual_deg       = zeros(size(theta_steer));
 patterns_to_plot = zeros(length(theta_steer), length(theta_scan));
 
+sv = phased.SteeringVector('SensorArray', Array,...
+    'PropagationSpeed', PropagationSpeed, ...
+    'NumPhaseShifterBits', 0);
+
 %% Main loop — continuous tuning 8 to 12 GHz
 for ti = 1 : length(theta_steer)
-    theta_rad     = deg2rad(theta_steer(ti));
-    req_phase_vec = 2*pi * (d/lambda) * element_idx * sin(theta_rad);
+    w_continuous = sv(Frequency, [theta_steer(ti); 0]);
 
     w = zeros(numElements, 1);
     for el = 1 : numElements
         % Required phase in degrees
-        phi_req_deg = rad2deg(wrapToPi(req_phase_vec(el)));
+        phi_req_deg = rad2deg(angle(w_continuous(el)));
 
         % Solve for fr that achieves phi_req at 10 GHz within [8, 12] GHz
         eqn    = ((2*angle((2 + fr)./(fr^2 - f^2 + 1i*0.05*fr*f)) + pi)*180/pi) ...
@@ -66,7 +69,7 @@ for ti = 1 : length(theta_steer)
             fr_sol = 12e9;
         end
 
-        %fprintf('    El %d:, quant=%.2f, fr=%.2f\n', el, phi_req_deg, fr_sol);
+        fprintf('    El %d:, phase=%.2f, fr=%.2f\n', el, phi_req_deg, fr_sol);
 
         % Compute R at solved
         R_el    = (2 + fr_sol) / (fr_sol^2 - f^2 + 1i*0.05*fr_sol*f);

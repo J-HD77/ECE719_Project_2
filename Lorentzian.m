@@ -1,14 +1,14 @@
 f = 10e9;
 syms fr;
-eqn = ((2*angle((2 + fr)./(fr^2-f^2+1i*0.05*fr*f))+pi)*180/pi ) == 169;
+eqn = ((2*angle((2 + fr)./(fr^2-f^2+1i*0.05*fr*f))+pi)*180/pi ) == -179.9;
 assume(fr,'positive')
-S = (vpasolve(eqn,fr)) %[output:4be030d9]
+S = (vpasolve(eqn,fr)) %[output:4e8b7481]
 
 %[appendix]{"version":"1.0"}
 %---
 %[metadata:view]
 %   data: {"layout":"onright"}
 %---
-%[output:4be030d9]
-%   data: {"dataType":"symbolic","outputData":{"name":"S","value":"12927904309.427636196817541096683"}}
+%[output:4e8b7481]
+%   data: {"dataType":"symbolic","outputData":{"name":"S","value":"174479836.06025840287964323718077"}}
 %---
